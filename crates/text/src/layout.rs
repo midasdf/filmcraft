@@ -60,6 +60,10 @@ pub struct TextStyle {
     pub faux_italic: bool,
     pub caps: Caps,
     pub underline: bool,
+    /// 縦中横 (horizontal in vertical): in vertical text, 2–4 consecutive half-width characters of
+    /// a run set with this are laid side by side across the column in one cell instead of one cell
+    /// each. Ignored in horizontal text.
+    pub tate_chu_yoko: bool,
 }
 
 impl Default for TextStyle {
@@ -76,6 +80,7 @@ impl Default for TextStyle {
             faux_italic: false,
             caps: Caps::Normal,
             underline: false,
+            tate_chu_yoko: false,
         }
     }
 }
@@ -109,7 +114,7 @@ impl Hash for TextStyle {
         hf(h, self.size);
         hf(h, self.tracking);
         hf(h, self.baseline_shift);
-        (self.kerning, self.ligatures, self.faux_bold, self.faux_italic, self.caps, self.underline).hash(h);
+        (self.kerning, self.ligatures, self.faux_bold, self.faux_italic, self.caps, self.underline, self.tate_chu_yoko).hash(h);
     }
 }
 
@@ -719,6 +724,7 @@ pub fn layout_rich_uncached(text: &str, style: &TextStyle, runs: &[StyleRun], pa
 
 /// Vertical layout: each grapheme is its own line (so carets, hit testing and selection work
 /// unchanged), stacked top to bottom and centred on its column; columns run right to left.
+/// 縦中横 groups 2–4 consecutive half-width characters into one of those lines.
 fn layout_vertical(text: &str, sty: &Styles, para: &ParagraphStyle, col_w: f32, mut lay: Layout) -> Layout {
     let style = sty.list[0];
     let pm = fonts::face(sty.prim[0].face).metrics(style.size);
@@ -738,56 +744,117 @@ fn layout_vertical(text: &str, sty: &Styles, para: &ParagraphStyle, col_w: f32, 
         for (off, cluster) in p_clean.grapheme_indices(true) {
             cells.extend(paragraph(cluster, base + off, sty, &flat));
         }
-        let h = row * cells.len() as f32;
+        // 縦中横: 2–4 consecutive half-width characters of a `tate_chu_yoko` style share one cell,
+        // so the column is that much shorter and the text after them moves up with it.
+        let mut rows: Vec<(usize, usize)> = Vec::new();
+        let mut ci = 0usize;
+        while ci < cells.len() {
+            let count = tate_chu_yoko_run(&cells, ci, sty, text);
+            rows.push((ci, count));
+            ci += count;
+        }
+        let h = row * rows.len() as f32;
         let y0 = match para.align {
             Align::Center => -h / 2.0,
             Align::Right => -h,
             _ => 0.0,
         };
         let cx = -(c as f32) * col_w;
-        for (k, pl) in cells.into_iter().enumerate() {
+        for (k, (first, count)) in rows.into_iter().enumerate() {
             let baseline = y0 + row * k as f32;
-            let shift = cx - pl.content / 2.0 - pl.left_trim;
             let g0 = lay.glyphs.len();
-            lay.glyphs.extend(pl.glyphs.into_iter().map(|mut g| {
-                g.x += shift;
-                // The alternate glyph hangs from its vertical origin. A horizontal ascent
-                // is not the top bearing of a vertical punctuation glyph (OpenType VORG/vmtx).
-                let font = fonts::face(g.face);
-                if text.get(g.cluster..).and_then(|s| s.chars().next()).is_some_and(uses_vertical_form)
-                    && let Some(origin) = font.vertical_origin(g.id, g.size)
-                {
-                    g.y += baseline - pl.ascent + origin;
+            let mut carets: Vec<(usize, f32)>;
+            let mut ascent;
+            let mut descent;
+            let (x, width, range);
+            if count == 1 {
+                let Some(pl) = cells.get_mut(first) else { continue };
+                let shift = cx - pl.content / 2.0 - pl.left_trim;
+                let pl_ascent = pl.ascent;
+                for mut g in std::mem::take(&mut pl.glyphs) {
+                    g.x += shift;
+                    // The alternate glyph hangs from its vertical origin. A horizontal ascent
+                    // is not the top bearing of a vertical punctuation glyph (OpenType VORG/vmtx).
+                    let font = fonts::face(g.face);
+                    if text.get(g.cluster..).and_then(|s| s.chars().next()).is_some_and(uses_vertical_form)
+                        && let Some(origin) = font.vertical_origin(g.id, g.size)
+                    {
+                        g.y += baseline - pl_ascent + origin;
+                    } else {
+                        g.y += baseline;
+                    }
+                    lay.glyphs.push(g);
+                }
+                // Underline runs down the column, to the right of the cell (the "below" side of vertical-rl).
+                let y_top = baseline - pl.ascent;
+                if rich {
+                    for (_x0, x1, si) in &pl.underlines {
+                        let st = sty.list[*si as usize];
+                        let um = fonts::face(sty.prim[*si as usize].face).metrics(st.size);
+                        let x = *x1 + shift - st.baseline_shift + um.underline_pos;
+                        lay.underlines.push([x, y_top, x + um.underline_thickness, y_top + row]);
+                        lay.underline_runs.push(*si);
+                    }
+                } else if style.underline && pl.content > 0.0 {
+                    let x = shift + pl.left_trim + pl.content + pm.underline_pos;
+                    lay.underlines.push([x, y_top, x + pm.underline_thickness, y_top + row]);
+                    lay.underline_runs.push(0);
+                }
+                carets = pl.carets.iter().map(|(b, x)| (*b, x + shift)).collect();
+                ascent = pl.ascent;
+                descent = pl.descent;
+                x = shift + pl.left_trim;
+                width = pl.content;
+                range = pl.range.clone();
+            } else {
+                // One cell: the characters stand side by side across the column, centred in it,
+                // sharing the cell's height. Their carets stay one per character boundary, so a
+                // caret or a click still lands between two of them.
+                let group = cells.get_mut(first..first + count).unwrap_or(&mut []);
+                let total: f32 = group.iter().map(|pl| pl.content).sum();
+                let x0 = cx - total / 2.0;
+                let mut cum = 0.0f32;
+                carets = Vec::new();
+                ascent = 0.0;
+                descent = 0.0;
+                for pl in group.iter_mut() {
+                    let slot = x0 + cum + pl.content / 2.0;
+                    for mut g in std::mem::take(&mut pl.glyphs) {
+                        g.x += slot;
+                        g.y += baseline;
+                        lay.glyphs.push(g);
+                    }
+                    carets.extend(pl.carets.iter().map(|(b, x)| (*b, x - pl.content / 2.0 + slot)));
+                    ascent = ascent.max(pl.ascent);
+                    descent = descent.max(pl.descent);
+                    cum += pl.content;
+                }
+                carets.sort_by_key(|c| c.0);
+                carets.dedup_by_key(|c| c.0);
+                // One underline down the column for the cell, as a single-character cell gets.
+                let y_top = baseline - ascent;
+                let underlined: Option<u16> = if rich {
+                    group.iter().find_map(|pl| pl.underlines.first().map(|u| u.2))
+                } else if style.underline && total > 0.0 {
+                    Some(0)
                 } else {
-                    g.y += baseline;
+                    None
+                };
+                if let Some(si) = underlined {
+                    let (st, face) = match (sty.list.get(si as usize), sty.prim.get(si as usize)) {
+                        (Some(st), Some(prim)) => (*st, prim.face),
+                        _ => (style, sty.prim[0].face),
+                    };
+                    let um = fonts::face(face).metrics(st.size);
+                    let ux = x0 + total + um.underline_pos;
+                    lay.underlines.push([ux, y_top, ux + um.underline_thickness, y_top + row]);
+                    lay.underline_runs.push(si);
                 }
-                g
-            }));
-            // Underline runs down the column, to the right of the cell (the "below" side of vertical-rl).
-            let y_top = baseline - pl.ascent;
-            if rich {
-                for (_x0, x1, si) in &pl.underlines {
-                    let st = sty.list[*si as usize];
-                    let um = fonts::face(sty.prim[*si as usize].face).metrics(st.size);
-                    let x = *x1 + shift - st.baseline_shift + um.underline_pos;
-                    lay.underlines.push([x, y_top, x + um.underline_thickness, y_top + row]);
-                    lay.underline_runs.push(*si);
-                }
-            } else if style.underline && pl.content > 0.0 {
-                let x = shift + pl.left_trim + pl.content + pm.underline_pos;
-                lay.underlines.push([x, y_top, x + pm.underline_thickness, y_top + row]);
-                lay.underline_runs.push(0);
+                x = x0;
+                width = total;
+                range = group.first().map(|pl| pl.range.start).unwrap_or(base)..group.last().map(|pl| pl.range.end).unwrap_or(base);
             }
-            lay.lines.push(Line {
-                range: pl.range,
-                baseline,
-                x: shift + pl.left_trim,
-                width: pl.content,
-                ascent: pl.ascent,
-                descent: pl.descent,
-                glyphs: g0..lay.glyphs.len(),
-                carets: pl.carets.into_iter().map(|(b, x)| (b, x + shift)).collect(),
-            });
+            lay.lines.push(Line { range, baseline, x, width, ascent, descent, glyphs: g0..lay.glyphs.len(), carets });
         }
         base += p.len() + 1;
     }
@@ -798,6 +865,25 @@ fn layout_vertical(text: &str, sty: &Styles, para: &ParagraphStyle, col_w: f32, 
     }
     lay.bounds = [-(ncols.max(1) as f32 - 0.5) * col_w, y0, col_w / 2.0, y1.max(y0)];
     lay
+}
+
+/// How many cells from `first` make one 縦中横 cell: 2–4 consecutive half-width printable ASCII
+/// characters whose style sets `tate_chu_yoko` (1 = no group).
+fn tate_chu_yoko_run(cells: &[ParaLine], first: usize, sty: &Styles, text: &str) -> usize {
+    const MAX: usize = 4;
+    let mut n = 0;
+    for pl in cells.iter().skip(first).take(MAX) {
+        if pl.range.start >= pl.range.end {
+            break;
+        }
+        let Some(c) = text.get(pl.range.start..pl.range.end).and_then(|s| s.chars().next()) else { break };
+        let Some(st) = sty.list.get(sty.at(pl.range.start)) else { break };
+        if !st.tate_chu_yoko || !c.is_ascii_graphic() {
+            break;
+        }
+        n += 1;
+    }
+    if n >= 2 { n } else { 1 }
 }
 
 fn cache() -> &'static Mutex<HashMap<u64, (u64, Arc<Layout>)>> {
@@ -1013,6 +1099,62 @@ mod tests {
         // differs from horizontal layout in the cache
         let h = layout("abc\nde", &st(40.0), &ParagraphStyle::default());
         assert_eq!(h.lines.len(), 2);
+    }
+
+    /// 縦中横: 2–4 consecutive half-width characters of a `tate_chu_yoko` run share one cell of a
+    /// vertical column — side by side across it, upright, inside one row — while the characters
+    /// that follow move up by the cells the group saved. Without the flag every character keeps
+    /// its own cell, and horizontal text ignores it.
+    #[test]
+    fn tate_chu_yoko_sets_half_width_characters_side_by_side_in_one_cell() {
+        let style = st(40.0);
+        let vertical = ParagraphStyle { vertical: true, ..Default::default() };
+        let tcy = TextStyle { tate_chu_yoko: true, ..style.clone() };
+        let text = "あ12い";
+        let plain = layout_rich(text, &style, &[], &vertical);
+        assert_eq!(plain.lines.len(), 4, "without the flag every character keeps its own cell");
+        let row = plain.lines[1].baseline - plain.lines[0].baseline;
+        assert!(row > 0.0);
+        let runs = [StyleRun { range: 3..5, style: tcy.clone() }];
+        let l = layout_rich(text, &style, &runs, &vertical);
+        assert!(l.vertical);
+        assert_eq!(l.lines.len(), 3, "the two digits share one cell: {:?}", l.lines);
+        let cell = &l.lines[1];
+        assert_eq!(cell.range, 3..5, "the cell covers both digits: {:?}", l.lines);
+        let digits: Vec<&Glyph> = l.glyphs.iter().filter(|g| (3..5).contains(&g.cluster)).collect();
+        assert_eq!(digits.len(), 2, "one glyph per digit: {digits:?}");
+        assert!((digits[0].y - digits[1].y).abs() < 0.01, "side by side, not stacked: {digits:?}");
+        assert!(digits[1].x > digits[0].x, "in reading order: {digits:?}");
+        assert!(cell.width > style.size * 0.4 && cell.width < style.size * 1.6, "about one cell across the column: {}", cell.width);
+        // The group takes one row down the column: what follows moves up by the cells it saved.
+        assert!((cell.baseline - l.lines[0].baseline - row).abs() < 0.01, "{:?}", l.lines);
+        assert!((l.lines[2].baseline - cell.baseline - row).abs() < 0.01, "{:?}", l.lines);
+        assert!(
+            (plain.lines[3].baseline - l.lines[2].baseline - row).abs() < 0.01,
+            "the character after the group sits one row higher than without the flag: {:?} against {:?}",
+            plain.lines,
+            l.lines
+        );
+        // One caret stop per character boundary: a caret or a click still works inside the group.
+        let stops: Vec<usize> = cell.carets.iter().map(|c| c.0).collect();
+        for b in 3..=5 {
+            assert!(stops.contains(&b), "caret at {b}: {stops:?}");
+        }
+        let (x, baseline, li) = l.caret(4);
+        assert_eq!((li, baseline), (1, cell.baseline));
+        assert!(x >= digits[0].x && x <= digits[1].x + 0.01, "between the digits: {x} in {}..{}", digits[0].x, digits[1].x);
+        assert_eq!(l.hit(x, baseline), 4, "a click between them lands there");
+        // A whole run flagged at the base style groups too.
+        let all = layout("12", &tcy, &vertical);
+        assert_eq!(all.lines.len(), 1, "the run is one cell: {:?}", all.lines);
+        assert_eq!(all.glyphs.len(), 2);
+        assert!((all.glyphs[0].y - all.glyphs[1].y).abs() < 0.01 && all.glyphs[1].x > all.glyphs[0].x);
+        // Horizontal text ignores the flag.
+        let horizontal = ParagraphStyle::default();
+        let h = layout_rich(text, &style, &[StyleRun { range: 3..5, style: tcy }], &horizontal);
+        let plain_h = layout_rich(text, &style, &[], &horizontal);
+        let glyphs = |l: &Layout| l.glyphs.iter().map(|g| (g.id, g.x, g.y, g.cluster)).collect::<Vec<_>>();
+        assert_eq!(glyphs(&h), glyphs(&plain_h), "horizontal layout is unchanged");
     }
 
     #[test]
