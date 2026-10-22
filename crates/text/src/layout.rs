@@ -818,13 +818,13 @@ fn layout_vertical(text: &str, sty: &Styles, para: &ParagraphStyle, col_w: f32, 
                 ascent = 0.0;
                 descent = 0.0;
                 for pl in group.iter_mut() {
-                    let slot = x0 + cum + pl.content / 2.0;
+                    let slot = x0 + cum;
                     for mut g in std::mem::take(&mut pl.glyphs) {
                         g.x += slot;
                         g.y += baseline;
                         lay.glyphs.push(g);
                     }
-                    carets.extend(pl.carets.iter().map(|(b, x)| (*b, x - pl.content / 2.0 + slot)));
+                    carets.extend(pl.carets.iter().map(|(b, x)| (*b, x + slot)));
                     ascent = ascent.max(pl.ascent);
                     descent = descent.max(pl.descent);
                     cum += pl.content;
@@ -876,9 +876,9 @@ fn tate_chu_yoko_run(cells: &[ParaLine], first: usize, sty: &Styles, text: &str)
         if pl.range.start >= pl.range.end {
             break;
         }
-        let Some(c) = text.get(pl.range.start..pl.range.end).and_then(|s| s.chars().next()) else { break };
+        let Some(cluster) = text.get(pl.range.start..pl.range.end) else { break };
         let Some(st) = sty.list.get(sty.at(pl.range.start)) else { break };
-        if !st.tate_chu_yoko || !c.is_ascii_graphic() {
+        if !st.tate_chu_yoko || !cluster.chars().all(|c| c.is_ascii_graphic()) {
             break;
         }
         n += 1;
@@ -1125,6 +1125,24 @@ mod tests {
         assert_eq!(digits.len(), 2, "one glyph per digit: {digits:?}");
         assert!((digits[0].y - digits[1].y).abs() < 0.01, "side by side, not stacked: {digits:?}");
         assert!(digits[1].x > digits[0].x, "in reading order: {digits:?}");
+        // One caret stop per character boundary: a caret or a click still works inside the group.
+        let stops: Vec<usize> = cell.carets.iter().map(|c| c.0).collect();
+        for b in 3..=5 {
+            assert!(stops.contains(&b), "caret at {b}: {stops:?}");
+        }
+        // The glyphs use each sub-slot's left edge, the same origin as the carets, and stay inside
+        // the cell: with the half-character offset the last digit crosses the cell's right edge.
+        assert!((digits[0].x - cell.x).abs() < 0.01, "first digit at the cell's left edge: {} vs {}", digits[0].x, cell.x);
+        let stop = |b: usize| cell.carets.iter().find(|c| c.0 == b).map_or(f32::MAX, |c| c.1);
+        let advance = stop(5) - stop(4);
+        assert!(
+            digits[1].x + advance <= cell.x + cell.width + 0.01,
+            "the digits stay inside the cell: {}..{} vs {}..{}",
+            digits[0].x,
+            digits[1].x + advance,
+            cell.x,
+            cell.x + cell.width
+        );
         assert!(cell.width > style.size * 0.4 && cell.width < style.size * 1.6, "about one cell across the column: {}", cell.width);
         // The group takes one row down the column: what follows moves up by the cells it saved.
         assert!((cell.baseline - l.lines[0].baseline - row).abs() < 0.01, "{:?}", l.lines);
@@ -1135,14 +1153,9 @@ mod tests {
             plain.lines,
             l.lines
         );
-        // One caret stop per character boundary: a caret or a click still works inside the group.
-        let stops: Vec<usize> = cell.carets.iter().map(|c| c.0).collect();
-        for b in 3..=5 {
-            assert!(stops.contains(&b), "caret at {b}: {stops:?}");
-        }
         let (x, baseline, li) = l.caret(4);
         assert_eq!((li, baseline), (1, cell.baseline));
-        assert!(x >= digits[0].x && x <= digits[1].x + 0.01, "between the digits: {x} in {}..{}", digits[0].x, digits[1].x);
+        assert!((x - digits[1].x).abs() < 0.01, "the caret between the digits sits at the second digit's origin: {x} vs {}", digits[1].x);
         assert_eq!(l.hit(x, baseline), 4, "a click between them lands there");
         // A whole run flagged at the base style groups too.
         let all = layout("12", &tcy, &vertical);
@@ -1155,6 +1168,18 @@ mod tests {
         let plain_h = layout_rich(text, &style, &[], &horizontal);
         let glyphs = |l: &Layout| l.glyphs.iter().map(|g| (g.id, g.x, g.y, g.cluster)).collect::<Vec<_>>();
         assert_eq!(glyphs(&h), glyphs(&plain_h), "horizontal layout is unchanged");
+    }
+
+    /// 縦中横 groups only half-width printable ASCII: a grapheme cluster that carries a combining
+    /// mark (`A` + U+0301) is not one, even though its first character is ASCII.
+    #[test]
+    fn tate_chu_yoko_does_not_group_a_grapheme_with_a_combining_mark() {
+        let style = TextStyle { tate_chu_yoko: true, ..st(40.0) };
+        let para = ParagraphStyle { vertical: true, ..Default::default() };
+        let l = layout("A\u{301}B", &style, &para);
+        assert_eq!(l.lines.len(), 2, "the combining mark keeps its base in one cell and B gets its own: {:?}", l.lines);
+        assert_eq!(l.lines[0].range, 0..3);
+        assert_eq!(l.lines[1].range, 3..4);
     }
 
     #[test]
