@@ -866,7 +866,14 @@ fn layout_vertical(text: &str, sty: &Styles, para: &ParagraphStyle, col_w: f32, 
         y0 = y0.min(l.baseline - l.ascent);
         y1 = y1.max(l.baseline + l.descent);
     }
-    lay.bounds = [-(ncols.max(1) as f32 - 0.5) * col_w, y0, col_w / 2.0, y1.max(y0)];
+    // The columns set the horizontal extent, but a 縦中横 group wider than its column runs past
+    // it into the neighbouring ones (it is never condensed), so every line widens the bounds too.
+    let (mut bx0, mut bx1) = (-(ncols.max(1) as f32 - 0.5) * col_w, col_w / 2.0);
+    for l in &lay.lines {
+        bx0 = bx0.min(l.x);
+        bx1 = bx1.max(l.x + l.width);
+    }
+    lay.bounds = [bx0, y0, bx1, y1.max(y0)];
     lay
 }
 
@@ -1171,6 +1178,23 @@ mod tests {
         let plain_h = layout_rich(text, &style, &[], &horizontal);
         let glyphs = |l: &Layout| l.glyphs.iter().map(|g| (g.id, g.x, g.y, g.cluster)).collect::<Vec<_>>();
         assert_eq!(glyphs(&h), glyphs(&plain_h), "horizontal layout is unchanged");
+    }
+
+    /// A 縦中横 group wider than its column overflows into the neighbouring columns by design; the
+    /// layout bounds must cover the whole group, or selection and clipping lose its ends.
+    #[test]
+    fn a_tate_chu_yoko_group_wider_than_the_column_widens_the_bounds() {
+        let vertical = ParagraphStyle { vertical: true, ..Default::default() };
+        let tcy = TextStyle { tate_chu_yoko: true, ..st(40.0) };
+        // The second column's centre lies one column width to the left of the first.
+        let two = layout("1234\na", &tcy, &vertical);
+        let col_w = -(two.lines[1].x + two.lines[1].width / 2.0);
+        let l = layout("1234", &tcy, &vertical);
+        assert_eq!(l.lines.len(), 1, "the four digits share one cell: {:?}", l.lines);
+        let cell = &l.lines[0];
+        assert!(cell.width > col_w, "the group is wider than one column: {} vs {col_w}", cell.width);
+        assert!(l.bounds[0] <= cell.x, "the left end of the group is inside the bounds: {} vs {}", cell.x, l.bounds[0]);
+        assert!(cell.x + cell.width <= l.bounds[2], "the right end of the group is inside the bounds: {} vs {}", cell.x + cell.width, l.bounds[2]);
     }
 
     /// A rich 縦中横 cell underlines each member at its own sub-slot, the way a single-character
