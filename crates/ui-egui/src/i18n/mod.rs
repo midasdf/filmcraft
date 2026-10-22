@@ -474,10 +474,10 @@ mod tests {
         assert!(missing.is_empty(), "untranslated menu labels: {missing:#?}");
     }
 
-    /// The core menus every other catalog must cover: the entries of the menus-only Ukrainian
-    /// catalog, which `ukrainian_entries_cover_the_original_menu_catalog` keeps to menu labels (and
-    /// the native macOS Settings menu). Brazilian Portuguese played this role while it was
-    /// menus-only.
+    /// The core menus every other catalog must cover: the entries of the Ukrainian catalog,
+    /// which `ukrainian_entries_cover_the_original_menu_catalog` keeps to menu labels (and the
+    /// native macOS Settings menu), plus the Text section's "Tate-Chu-Yoko" property label.
+    /// Brazilian Portuguese played this role while it was menus-only.
     fn core_menu_labels() -> Vec<String> {
         let (entries, _) = catalog::parse_entries(include_str!("uk.tsv"));
         entries.into_iter().map(|(_, en, _)| en).collect()
@@ -1095,8 +1095,10 @@ mod tests {
         let items = crate::menus::menu_items(&app);
         let known = |text: &str| crate::menus::MENUS.contains(&text) || items.iter().any(|it| it.label == text || it.path.iter().any(|p| p == text));
         let (entries, _) = catalog::parse_entries(include_str!("uk.tsv"));
+        // The Text section's "Tate-Chu-Yoko" property is the one non-menu entry the catalog
+        // carries; every other string must be a menu label (or the native macOS Settings item).
         for (_, en, _) in entries {
-            assert!(known(&en) || en == "Settings", "not a menu label: {en}");
+            assert!(known(&en) || matches!(en.as_str(), "Settings" | "Tate-Chu-Yoko"), "not a menu label: {en}");
         }
         for en in crate::menus::MENUS.into_iter().chain(["Audio", "Settings"]) {
             assert_ne!(Language::Uk.tr(en), en, "untranslated Ukrainian menu: {en}");
@@ -1202,8 +1204,10 @@ mod tests {
         let items = crate::menus::menu_items(&app);
         let known = |text: &str| crate::menus::MENUS.contains(&text) || items.iter().any(|it| it.label == text || it.path.iter().any(|p| p == text));
         let (entries, _) = catalog::parse_entries(include_str!("ru.tsv"));
+        // The Text section's "Tate-Chu-Yoko" property is the one non-menu entry the catalog
+        // carries; every other string must be a menu label (or the native macOS Settings item).
         for (_, en, _) in entries {
-            assert!(known(&en) || en == "Settings", "not a menu label: {en}");
+            assert!(known(&en) || matches!(en.as_str(), "Settings" | "Tate-Chu-Yoko"), "not a menu label: {en}");
         }
         for en in core_menu_labels() {
             assert!(Language::Ru.has(&en), "missing Russian menu label: {en}");
