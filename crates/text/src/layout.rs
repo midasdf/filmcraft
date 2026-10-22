@@ -831,24 +831,27 @@ fn layout_vertical(text: &str, sty: &Styles, para: &ParagraphStyle, col_w: f32, 
                 }
                 carets.sort_by_key(|c| c.0);
                 carets.dedup_by_key(|c| c.0);
-                // One underline down the column for the cell, as a single-character cell gets.
+                // One underline down the column for each underlined member, at that member's
+                // slot in the cell: the underline runs to the right of the characters it
+                // covers, as in the single-character cell above. Taking the first underlined
+                // member's style for the whole cell lost the other members' positions and runs.
                 let y_top = baseline - ascent;
-                let underlined: Option<u16> = if rich {
-                    group.iter().find_map(|pl| pl.underlines.first().map(|u| u.2))
+                if rich {
+                    let mut slot = x0;
+                    for pl in group.iter() {
+                        for (_x0, x1, si) in &pl.underlines {
+                            let (Some(st), Some(prim)) = (sty.list.get(*si as usize), sty.prim.get(*si as usize)) else { continue };
+                            let um = fonts::face(prim.face).metrics(st.size);
+                            let ux = slot + *x1 - st.baseline_shift + um.underline_pos;
+                            lay.underlines.push([ux, y_top, ux + um.underline_thickness, y_top + row]);
+                            lay.underline_runs.push(*si);
+                        }
+                        slot += pl.content;
+                    }
                 } else if style.underline && total > 0.0 {
-                    Some(0)
-                } else {
-                    None
-                };
-                if let Some(si) = underlined {
-                    let (st, face) = match (sty.list.get(si as usize), sty.prim.get(si as usize)) {
-                        (Some(st), Some(prim)) => (*st, prim.face),
-                        _ => (style, sty.prim[0].face),
-                    };
-                    let um = fonts::face(face).metrics(st.size);
-                    let ux = x0 + total + um.underline_pos;
-                    lay.underlines.push([ux, y_top, ux + um.underline_thickness, y_top + row]);
-                    lay.underline_runs.push(si);
+                    let ux = x0 + total + pm.underline_pos;
+                    lay.underlines.push([ux, y_top, ux + pm.underline_thickness, y_top + row]);
+                    lay.underline_runs.push(0);
                 }
                 x = x0;
                 width = total;
@@ -1168,6 +1171,40 @@ mod tests {
         let plain_h = layout_rich(text, &style, &[], &horizontal);
         let glyphs = |l: &Layout| l.glyphs.iter().map(|g| (g.id, g.x, g.y, g.cluster)).collect::<Vec<_>>();
         assert_eq!(glyphs(&h), glyphs(&plain_h), "horizontal layout is unchanged");
+    }
+
+    /// A rich 縦中横 cell underlines each member at its own sub-slot, the way a single-character
+    /// cell puts the strip to the right of its character, rather than the first underlined
+    /// member's style at the right edge of the whole cell.
+    #[test]
+    fn a_tate_chu_yoko_cell_keeps_each_underlined_member_in_its_slot() {
+        let vertical = ParagraphStyle { vertical: true, ..Default::default() };
+        let base = TextStyle { tate_chu_yoko: true, ..st(40.0) };
+        let underlined = TextStyle { underline: true, ..base.clone() };
+        let runs = [StyleRun { range: 0..1, style: underlined.clone() }];
+        let l = layout_rich("12", &base, &runs, &vertical);
+        assert_eq!(l.lines.len(), 1, "the digits share one cell: {:?}", l.lines);
+        let cell = &l.lines[0];
+        assert_eq!(l.underlines.len(), 1, "only the first digit is underlined");
+        assert_eq!(l.underline_runs, vec![1]);
+        // The strip runs down the right edge of the first digit's slot, measured from the same
+        // style in a single-character cell.
+        let one = layout("1", &underlined, &vertical);
+        let offset = one.underlines[0][0] - (one.lines[0].x + one.lines[0].width);
+        let slot_edge = cell.x + one.lines[0].width;
+        let [ux, top, ux1, bottom] = l.underlines[0];
+        assert!((ux - (slot_edge + offset)).abs() < 0.01, "the strip follows the first digit's slot: {ux} vs {}", slot_edge + offset);
+        assert!(ux < cell.x + cell.width - 1.0, "not the right edge of the cell: {ux} vs {}", cell.x + cell.width);
+        assert!(bottom - top > ux1 - ux, "a vertical strip");
+        assert!((top - (cell.baseline - cell.ascent)).abs() < 0.01, "the strip shares the cell's top");
+        assert!((bottom - top - (one.underlines[0][3] - one.underlines[0][1])).abs() < 0.01, "one row tall");
+        // With both digits underlined, each keeps its own strip and run, even in different styles.
+        let two = [StyleRun { range: 0..1, style: underlined.clone() }, StyleRun { range: 1..2, style: TextStyle { tracking: 20.0, ..underlined } }];
+        let both = layout_rich("12", &base, &two, &vertical);
+        assert_eq!(both.lines.len(), 1);
+        assert_eq!(both.underlines.len(), 2, "one strip per underlined digit: {:?}", both.underlines);
+        assert_eq!(both.underline_runs, vec![1, 2]);
+        assert!(both.underlines[0][0] < both.underlines[1][0], "left to right, as the digits stand: {:?}", both.underlines);
     }
 
     /// 縦中横 groups only half-width printable ASCII: a grapheme cluster that carries a combining
