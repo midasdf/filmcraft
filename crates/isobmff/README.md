@@ -118,18 +118,18 @@ let bytes = w.finish_faststart()?.into_inner(); // or finish() for moov-at-end
 ## Tests
 - Unit tests cover the box reader and hand-built `stbl` edge cases (stz2, co64, ctts v1, empty edits,
   64-bit and size-0 boxes, uuid/wide/skip), codec config round-trips, and allocation guards.
-- Property tests (`tests/roundtrip.rs`) write random multi-track files, both progressive (MP4/MOV,
+- Property tests (`tests/it/roundtrip.rs`) write random multi-track files, both progressive (MP4/MOV,
   faststart, PCM, edits) and fragmented, then read them back and compare sample tables and bytes.
-- ffprobe oracle tests (`tests/oracle_demux.rs`) run on ffmpeg-generated fixtures in
+- ffprobe oracle tests (`tests/it/oracle_demux.rs`) run on ffmpeg-generated fixtures in
   `target/fixtures/isobmff/`: H.264 with B-frames (MP4 and MOV), HEVC, ProRes 422/4444, MJPEG, DNxHR, PCM
   s16le/s16be/s24le/f32le, AAC, ALAC, FLAC, Opus, AC-3, VP9, AV1, fragmented (with and without
   default-base-is-moof), faststart, an edit-list cut, `tmcd` at 29.97 DF and 23.976, and colr/pasp. They
   compare packet offsets, sizes, pts/dts, durations and key flags, plus stream parameters. Tests skip
   with a message when ffmpeg or an encoder is missing.
-- Muxer oracle tests (`tests/oracle_mux.rs`) remux fixtures with our writers. They check that
+- Muxer oracle tests (`tests/it/oracle_mux.rs`) remux fixtures with our writers. They check that
   `ffmpeg -v error -f null` reports nothing, that ffprobe packets and stream parameters match the source,
   and that timecode, the AAC priming edit, ipcm and fMP4 output are correct.
-- Mutation fuzzing (`tests/fuzz.rs`) uses a deterministic seed to mutate and truncate synthetic and
+- Mutation fuzzing (`tests/it/fuzz.rs`) uses a deterministic seed to mutate and truncate synthetic and
   ffmpeg files, and checks that nothing panics.
 
 ## Limitations / not yet supported
