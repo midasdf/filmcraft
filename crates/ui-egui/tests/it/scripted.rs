@@ -191,10 +191,11 @@ fn spanish_search_finds_effects_and_presets_with_stable_automation_ids() {
     let mut d = Driver::demo();
     d.ok("ui.menu.invoke", json!({"id": "app.language.spanish"}));
     d.ok("ui.panel.show", json!({"panel": "Effects"}));
-    d.ok("ui.set", json!({"effectsSearch": "DESENFOQUE"}));
+    let es = filmcraft_ui_egui::i18n::Language::Es;
+    d.ok("ui.set", json!({"effectsSearch": es.tr("Gaussian Blur").to_uppercase()}));
     d.frames(3);
     assert!(d.element_ids("effects.item.").contains(&"effects.item.gaussian_blur".to_string()));
-    d.ok("ui.set", json!({"effectsSearch": "ENTRADA CON DESENFOQUE"}));
+    d.ok("ui.set", json!({"effectsSearch": es.tr("Blur In").to_uppercase()}));
     d.frames(3);
     assert!(d.element_ids("effects.preset.").contains(&"effects.preset.Blur In".to_string()));
     let clip = track_clips(&d.sequence(), 0)[0]["clip"].as_u64().unwrap();

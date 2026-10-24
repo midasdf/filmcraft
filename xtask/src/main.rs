@@ -16,8 +16,10 @@
 //!   lists, against a reference list (default: the local `plan/premiere/<area>.json`), presence and
 //!   placement reported separately (`parity.rs`, docs/gaps.md G7).
 //! - `ico <out.ico> <in.png>…`: pack PNGs into a Windows `.ico` (used by `packaging/icons.sh`).
+//! - `i18n-report`: print the interface strings each language's catalog lacks (they show in
+//!   English). It never fails.
 //! - `ci`: fmt check, clippy -D warnings, tests (`cargo nextest run` when installed) and doctests,
-//!   layers, assets, wasm.
+//!   the i18n report, layers, assets, wasm.
 
 mod ico;
 mod parity;
@@ -458,7 +460,9 @@ fn ci() -> Result<(), String> {
     let cargo = env!("CARGO");
     run(Command::new(cargo).args(["fmt", "--check"]))?;
     run(Command::new(cargo).args(["clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]))?;
-    tests()?;
+    let tested = tests();
+    i18n_report();
+    tested?;
     layers()?;
     assets()?;
     wasm()
@@ -477,6 +481,16 @@ fn tests() -> Result<(), String> {
         run(Command::new(cargo).arg("test").args(targets))?;
     }
     run(Command::new(cargo).args(["test", "--workspace", "--doc"]))
+}
+
+/// The missing-translations report (`i18n::tests::missing_translations_report` in
+/// `filmcraft-ui-egui`), printed to the log. A missing translation never fails a build, so
+/// neither does this.
+fn i18n_report() {
+    let args = ["test", "-p", "filmcraft-ui-egui", "--lib", "--", "--exact", "i18n::tests::missing_translations_report", "--nocapture"];
+    if let Err(e) = run(Command::new(env!("CARGO")).args(args)) {
+        eprintln!("i18n report not printed: {e}");
+    }
 }
 
 /// The headless playback benchmark (`crates/ui-egui/examples/bench_playback.rs`); extra
@@ -507,6 +521,10 @@ fn main() -> ExitCode {
         "assets" => assets(),
         "fixtures" => fixtures(&std::env::args().skip(2).collect::<Vec<_>>()),
         "ci" => ci(),
+        "i18n-report" => {
+            i18n_report();
+            Ok(())
+        }
         "bench" => bench(),
         "bench-playback" => bench_playback(),
         "web" => web(&std::env::args().skip(2).collect::<Vec<_>>()),
