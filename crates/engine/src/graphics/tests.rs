@@ -745,5 +745,8 @@ fn tate_chu_yoko_property_and_character_style() {
     // Clearing the style removes it again.
     s.execute("graphics.setCharStyle", json!({"clip": clip, "clear": true})).unwrap();
     let (_, it) = s.active_sequence().unwrap().find_item(clip).unwrap();
-    assert!(it.effects.iter().find(|e| e.effect == "graphic_text").and_then(|e| e.layer.as_ref()).is_none(), "the cleared style leaves no runs");
+    // The layer itself stays: a new graphic layer keeps the uid `ensure_layer_uids` gave it, so
+    // what the clear removes is the runs.
+    let runs = it.effects.iter().find(|e| e.effect == "graphic_text").and_then(|e| e.layer.as_ref()).map(|l| l.runs.clone()).unwrap_or_default();
+    assert!(runs.is_empty(), "the cleared style leaves no runs: {runs:?}");
 }

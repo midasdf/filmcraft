@@ -3309,6 +3309,10 @@ fn build() -> Vec<CommandSpec> {
                         applied.push(json!({"clip": i.id.0, "index": pos, "effect": def.id}));
                     }
                 }
+                // a video effect on only audio clips changes nothing: refuse before the edit commits an empty undo step
+                if applied.is_empty() {
+                    return Err(bad("effects.apply", format!("`{}` does not apply to the selected clips", def.name)));
+                }
                 Ok(applied)
             })?;
             Ok(json!({"applied": applied}))

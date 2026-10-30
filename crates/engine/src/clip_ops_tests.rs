@@ -1204,3 +1204,15 @@ fn set_param_rejects_colour_component_that_overflows_f32() {
     let bytes = filmcraft_format::encode(&s.project, false);
     filmcraft_format::decode(&bytes).unwrap();
 }
+
+/// #2326 review: a video effect aimed only at an audio clip applies to nothing, so it is refused
+/// instead of committing an empty undo step that would clear redo.
+#[test]
+fn video_effect_on_only_an_audio_clip_is_refused_without_an_undo_step() {
+    let mut s = demo();
+    let a = s.active_sequence().unwrap().audio_tracks[0].items[0].id.0;
+    let undo0 = s.history.undo.len();
+    let r = s.execute("effects.apply", json!({"clips": [a], "effect": "gaussian_blur"}));
+    assert!(r.is_err(), "{r:?}");
+    assert_eq!(s.history.undo.len(), undo0, "no undo step");
+}

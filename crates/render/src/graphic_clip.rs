@@ -49,6 +49,7 @@ pub fn text_styles(t: &TextProps) -> (TextStyle, ParagraphStyle) {
             faux_italic: t.faux_italic,
             caps: caps_of(t.caps),
             underline: t.underline,
+            strikethrough: t.strikethrough,
             tate_chu_yoko: t.tate_chu_yoko,
         },
         ParagraphStyle {
@@ -92,6 +93,7 @@ pub fn text_runs(t: &TextProps, base: &TextStyle) -> Vec<StyleRun> {
                 faux_italic: c.faux_italic.unwrap_or(base.faux_italic),
                 caps: c.caps.map_or(base.caps, caps_of),
                 underline: c.underline.unwrap_or(base.underline),
+                strikethrough: c.strikethrough.unwrap_or(base.strikethrough),
                 tate_chu_yoko: c.tate_chu_yoko.unwrap_or(base.tate_chu_yoko),
                 ..base.clone()
             },

@@ -175,6 +175,16 @@ pub(crate) enum ImeComposition {
     Stale,
 }
 
+/// Why the control server is not serving although `--control` was given, for the status bar
+/// (#3436). The UI translates each cause as a whole sentence; the desktop app maps its
+/// `control_server::DisabledWhy` onto this.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ControlNotice {
+    /// `FILMCRAFT_CONTROL_TOKEN` is missing or malformed. (A bind failure is only logged until
+    /// #3318 reworks port-collision reporting.)
+    Token,
+}
+
 pub struct FilmcraftApp {
     pub session: Session,
     pub ui: UiState,
@@ -221,6 +231,10 @@ pub struct FilmcraftApp {
     /// [`MAX_THUMB_TEXTURES`] are freed, least recently used first (#1682).
     thumb_used: HashMap<String, u64>,
     control_rx: Option<Receiver<ControlRequest>>,
+    /// Why the control server is not serving although `--control` was given (a malformed
+    /// `FILMCRAFT_CONTROL_TOKEN`, a port that cannot be bound): shown whenever the status bar is
+    /// idle (#3436). It is also in `filmcraft.log`; `None` when the server is running.
+    pub(crate) control_notice: Option<ControlNotice>,
     /// One explicit panel reveal; consumed by the custom renderer, never repeated per frame.
     pub(crate) pending_panel_raise: Option<PanelKind>,
     /// Explicit automation mode: native widget input and native menu commands are excluded.

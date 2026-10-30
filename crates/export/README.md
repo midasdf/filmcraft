@@ -3,6 +3,21 @@
 The export pipeline renders sequence frames, encodes them and writes the selected container.
 See [architecture](../../docs/architecture.md) for formats, settings, presets and queue behavior.
 
+## MP4 upload compatibility (#3459)
+
+MP4 video exports finalize with the existing ISO BMFF muxer's fast-start layout: `ftyp`, then
+`moov` metadata before `mdat` media data. This lets progressive players and upload services read
+the track metadata before downloading the media. The choice follows the container, so it applies
+to H.264, HEVC and AV1 MP4 exports with software or hardware encoders. QuickTime MOV and
+audio-only export layouts are unchanged.
+
+The muxer shifts media in place with a bounded copy buffer and updates sample offsets; it does
+not load the entire disk export into memory. Disk outputs therefore need read and write access.
+Callers supplying `ExportSettings::output_file` for MP4 video must reserve a readable, writable
+file. Buffered writes are flushed before reads through that same handle. In-memory download
+sinks use their existing seekable byte buffer. Read, write and seek failures propagate as export
+errors.
+
 ## Animated GIF transparency
 
 Animated GIF supports the existing `ExportSettings::alpha` option (#3396). In Export mode,
