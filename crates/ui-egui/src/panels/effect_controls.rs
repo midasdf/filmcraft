@@ -742,6 +742,52 @@ fn param_value_widget(
         (ParamKind::Path, _) => {
             crate::panels::masks::path_value(app, vui, clip, idx, mask, actions);
         }
+        // a text layer's Font and Font Style pick from the installed families and styles, as the
+        // Text panel's drop-downs do (#3539)
+        (ParamKind::Text, ParamValue::Text(current)) if e.effect == filmcraft_project::graphic::TEXT_LAYER && matches!(pd.id, "font" | "font_style") => {
+            if !filmcraft_text::fonts::system_scanned() {
+                filmcraft_text::fonts::scan_system();
+            }
+            let fams = filmcraft_text::families();
+            let salt = ("ec-font", clip.0, idx, pd.id);
+            // the value column can be narrower than the usual drop-down; keep the button inside it
+            let w = 150.0_f32.min(vui.available_width()).max(40.0);
+            let prefix = format!("effectControls.text.{}.{}.option", idx, pd.id);
+            let combo = if pd.id == "font" {
+                craft_ui::ComboBox::from_id_salt(salt).selected_text(current).width(w).height(400.0).show_ui(vui, |ui| {
+                    for (f, _) in &fams {
+                        let r = ui.selectable_label(f == current, f);
+                        app.auto.add(&format!("{prefix}.{f}"), r.rect, f);
+                        if r.clicked() {
+                            set = Some(json!(f));
+                        }
+                    }
+                })
+            } else {
+                let family = match e.param("font").map(|p| &p.value) {
+                    Some(ParamValue::Text(f)) => f.as_str(),
+                    _ => "",
+                };
+                let mut styles: Vec<&str> =
+                    fams.iter().find(|(f, _)| f.eq_ignore_ascii_case(family)).map(|(_, s)| s.iter().map(String::as_str).collect()).unwrap_or_default();
+                for extra in ["Bold", "Italic", "Bold Italic"] {
+                    if !styles.contains(&extra) {
+                        styles.push(extra);
+                    }
+                }
+                craft_ui::ComboBox::from_id_salt(salt).selected_text(current).width(w).show_ui(vui, |ui| {
+                    for st in styles {
+                        let r = ui.selectable_label(st == current, st);
+                        app.auto.add(&format!("{prefix}.{st}"), r.rect, st);
+                        if r.clicked() {
+                            set = Some(json!(st));
+                        }
+                    }
+                })
+            };
+            let r = crate::widgets::accessible_name(combo.response, crate::i18n::t(pd.label));
+            app.auto.add(&format!("effectControls.text.{}.{}", idx, pd.id), r.rect, pd.label);
+        }
         (ParamKind::Text, ParamValue::Text(s)) if !pd.id.ends_with("_lut") => {
             // edited in a buffer; committed (one undo step) when the field loses focus
             let mut buf = vui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| s.clone());
